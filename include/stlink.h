@@ -53,7 +53,6 @@ extern "C" {
     /* cortex core ids */
     // TODO clean this up...
 #define STM32VL_CORE_ID 0x1ba01477
-#define CS32_CORE_ID 0x2ba01477
 #define STM32F7_CORE_ID 0x5ba02477
 
     // Constant STM32 memory map figures
@@ -86,7 +85,6 @@ extern "C" {
         STLINK_FLASH_TYPE_F4,
         STLINK_FLASH_TYPE_L4,
         STLINK_FLASH_TYPE_F1_XL,
-        STLINK_FLASH_TYPE_G0,
     };
 
     struct stlink_reg {

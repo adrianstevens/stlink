@@ -535,11 +535,6 @@ int _stlink_sg_reset(stlink_t *sl) {
     if (stlink_q(sl))
         return -1;
 
-    // Reset through AIRCR so NRST does not need to be connected
-    if (stlink_write_debug32(sl, STLINK_REG_AIRCR,
-                STLINK_REG_AIRCR_VECTKEY | STLINK_REG_AIRCR_SYSRESETREQ))
-        return -1;
-
     stlink_stat(sl, "core reset");
     return 0;
 }
@@ -949,10 +944,6 @@ static stlink_t* stlink_open(const int verbose) {
     struct stlink_libsg *slsg = malloc(sizeof (struct stlink_libsg));
     if (sl == NULL || slsg == NULL) {
         WLOG("Couldn't malloc stlink and stlink_sg structures out of memory!\n");
-        if(sl != NULL)
-            free(sl);
-        if(slsg != NULL)
-            free(slsg);
         return NULL;
     }
 

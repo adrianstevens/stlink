@@ -151,7 +151,7 @@ int parse_options(int argc, char** argv, st_state_t *st) {
                 if (optarg) {
                     st->logging_level = atoi(optarg);
                 } else {
-                    st->logging_level = DEBUG_LOGGING_LEVEL;
+                    st->logging_level = DEFAULT_LOGGING_LEVEL;
                 }
                 break;
             case '1':
@@ -485,6 +485,9 @@ static const char* const memory_map_template_F7 =
     "  <memory type=\"flash\" start=\"0x08040000\" length=\"0xC0000\">"     // Sectors 5..7
     "    <property name=\"blocksize\">0x40000</property>"                   // 128kB
     "  </memory>"
+    "  <memory type=\"flash\" start=\"0x08100000\" length=\"0x100000\">"    // Sectors 8..16
+    "    <property name=\"blocksize\">0x40000</property>"                   // 128kB
+    "  </memory>"
     "  <memory type=\"ram\" start=\"0x40000000\" length=\"0x1fffffff\"/>"   // peripheral regs
     "  <memory type=\"ram\" start=\"0x60000000\" length=\"0x7fffffff\"/>"   // AHB3 Peripherals
     "  <memory type=\"ram\" start=\"0xe0000000\" length=\"0x1fffffff\"/>"   // cortex regs
@@ -522,7 +525,7 @@ char* make_memory_map(stlink_t *sl) {
     char* map = malloc(sz);
     map[0] = '\0';
 
-    if(sl->chip_id==STLINK_CHIPID_STM32_F4 || sl->chip_id==STLINK_CHIPID_STM32_F446 || sl->chip_id==STLINK_CHIPID_STM32_F411RE) {
+    if(sl->chip_id==STLINK_CHIPID_STM32_F4 || sl->chip_id==STLINK_CHIPID_STM32_F446) {
         strcpy(map, memory_map_template_F4);
     } else if(sl->chip_id==STLINK_CHIPID_STM32_F4_DE) {
         strcpy(map, memory_map_template_F4_DE);

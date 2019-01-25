@@ -4,11 +4,34 @@
 #include <unistd.h>
 #include <stdlib.h>
 #include <errno.h>
+#include <sys/stat.h>
 
 #include "semihosting.h"
 
 #include <stlink.h>
 #include <stlink/logging.h>
+
+struct nuttx_stat {
+    unsigned int mode;
+    int32_t size;
+    int16_t blksize;
+    uint32_t blocks;
+    uint32_t atime;
+    uint32_t mtime;
+    uint32_t ctime;
+};
+
+static int convert_stat(struct stat *st, struct nuttx_stat *nuttx_st) {
+    nuttx_st->mode = st->st_mode;
+    nuttx_st->size = (int32_t) st->st_size;
+    nuttx_st->blksize = st->st_blksize;
+    nuttx_st->blocks = (uint32_t) st->st_blocks;
+    nuttx_st->atime = (uint32_t) st->st_atime;
+    nuttx_st->mtime = (uint32_t) st->st_mtime;
+    nuttx_st->ctime = (uint32_t) st->st_ctime;
+
+    return 0;
+}
 
 static int mem_read_u8(stlink_t *sl, uint32_t addr, uint8_t *data)
 {
@@ -91,19 +114,6 @@ static int mem_read(stlink_t *sl, uint32_t addr, void *data, uint16_t len)
 
 static int mem_write(stlink_t *sl, uint32_t addr, void *data, uint16_t len)
 {
-    // Note: this function can write more than it is asked to!
-    // If addr is not an even 32 bit boundary, or len is not a multiple of 4.
-    //
-    // If only 32 bit values can be written to the target,
-    // then this function should read the target memory at the
-    // start and end of the buffer where it will write more that
-    // the requested bytes. (perhaps reading the whole area is faster??).
-    //
-    // If 16 and 8 bit writes are available, then they could be used instead.
- 
-    // Just return when the length is zero avoiding unneeded work.
-    if (len == 0) return 0;
-
     int offset = addr % 4;
     int write_len = len + offset;
 
@@ -134,9 +144,9 @@ static int mem_write(stlink_t *sl, uint32_t addr, void *data, uint16_t len)
 
 /* Define a maximum size for buffers transmitted by semihosting. There is no
  * limit in the ARM specification but this is a safety net.
- * We remove 4 byte from Q_BUF_LEN to handle alignment correction.
+ * However, write_mem only takes a uint16_t
  */
-#define MAX_BUFFER_SIZE (Q_BUF_LEN - 4)
+#define MAX_BUFFER_SIZE ((UINT16_MAX) & ~(8 - 1))
 
 /* Flags for Open syscall */
 
@@ -320,7 +330,6 @@ int do_semihosting (stlink_t *sl, uint32_t r0, uint32_t r1, uint32_t *ret) {
         int      fd;
         uint32_t buffer_len;
         void    *buffer;
-	ssize_t  read_result;
 
         if (mem_read(sl, r1, args, sizeof (args)) != 0 ) {
             DLOG("Semihosting SYS_READ error: "
@@ -334,10 +343,7 @@ int do_semihosting (stlink_t *sl, uint32_t r0, uint32_t r1, uint32_t *ret) {
         buffer_len     = args[2];
 
         if (buffer_len > MAX_BUFFER_SIZE) {
-            DLOG("Semihosting SYS_READ error: buffer size is too big %d\n",
-                buffer_len);
-            *ret = buffer_len;
-            return -1;
+            buffer_len = MAX_BUFFER_SIZE;
         }
 
         buffer = malloc(buffer_len);
@@ -351,20 +357,18 @@ int do_semihosting (stlink_t *sl, uint32_t r0, uint32_t r1, uint32_t *ret) {
         DLOG("Semihosting: read(%d, target_addr:0x%08x, %zu)\n", fd,
              buffer_address, buffer_len);
 
-        read_result = read(fd, buffer, buffer_len);
+        *ret = (uint32_t)read(fd, buffer, buffer_len);
         saved_errno = errno;
 
-        if (read_result == -1) {
+        if (*ret == (uint32_t)-1) {
             *ret = buffer_len;
         } else {
-            if (mem_write(sl, buffer_address, buffer, read_result) != 0 ) {
+            if (mem_write(sl, buffer_address, buffer, *ret) != 0 ) {
                 DLOG("Semihosting SYS_READ error: "
                      "cannot write buffer to target memory\n");
                 free(buffer);
                 *ret = buffer_len;
                 return -1;
-            } else {
-                *ret = buffer_len - (uint32_t)read_result;
             }
         }
 
@@ -475,6 +479,133 @@ int do_semihosting (stlink_t *sl, uint32_t r0, uint32_t r1, uint32_t *ret) {
     {
         uint8_t c = getchar();
         *ret = c;
+        break;
+    }
+    case SEMIHOST_SYS_STAT:
+    {
+        uint32_t args[3];
+        uint32_t buffer_address;
+        uint32_t name_address;
+        uint32_t name_len;
+        char *name;
+        struct stat st;
+        struct nuttx_stat nuttx_st;
+
+        if (mem_read(sl, r1, args, sizeof (args)) != 0 ) {
+            DLOG("Semihosting SYS_STAT error: "
+                 "cannot read args from target memory\n");
+            *ret = -1;
+            return -1;
+        }
+
+        name_address = args[0];
+        buffer_address = args[1];
+        name_len     = args[2];
+
+        /* Add the trailing zero that is not counted in the length argument (see
+         * ARM semihosting specification)
+         */
+        name_len += 1;
+
+        if (name_len > MAX_BUFFER_SIZE) {
+            DLOG("Semihosting SYS_STAT error: name buffer size is too big %d\n",
+                name_len);
+            *ret = -1;
+            return -1;
+        }
+        name = malloc(name_len);
+
+        if (name == NULL) {
+            DLOG("Semihosting SYS_STAT error: cannot allocate name buffer\n");
+            *ret = -1;
+            return -1;
+        }
+
+        if (mem_read(sl, name_address, name, name_len) != 0 ) {
+            free(name);
+            *ret = -1;
+            DLOG("Semihosting SYS_STAT error: "
+                 "cannot read name from target memory\n");
+            return -1;
+        }
+
+        *ret = stat(name, &st);
+
+        if (*ret == (uint32_t)-1) {
+            return -1;
+        } else {
+            convert_stat(&st, &nuttx_st);
+
+            if (mem_write(sl, buffer_address, &nuttx_st, sizeof(struct nuttx_stat)) != 0 ) {
+                DLOG("Semihosting SYS_STAT error: "
+                     "cannot write buffer to target memory\n");
+                return -1;
+            }
+        }
+        break;
+    }
+    case SEMIHOST_SYS_FSTAT:
+    {
+        uint32_t args[2];
+        uint32_t buffer_address;
+        int      fd;
+        struct stat st;
+        struct nuttx_stat nuttx_st;
+
+        if (mem_read(sl, r1, args, sizeof (args)) != 0 ) {
+            DLOG("Semihosting SYS_FSTAT error: "
+                 "cannot read args from target memory\n");
+            *ret = -1;
+            return -1;
+        }
+
+        fd             = (int)args[0];
+        buffer_address = args[1];
+
+        *ret = fstat(fd, &st);
+
+        DLOG("Semihosting fstat result: %d\n", *ret);
+
+        if (*ret == (uint32_t)-1) {
+            return -1;
+        } else {
+            convert_stat(&st, &nuttx_st);
+
+            if (mem_write(sl, buffer_address, &nuttx_st, sizeof(struct nuttx_stat)) != 0 ) {
+                DLOG("Semihosting SYS_FSTAT error: "
+                     "cannot write buffer to target memory\n");
+                return -1;
+            }
+        }
+        break;
+    }
+    case SEMIHOST_SYS_LSEEK:
+    {
+        uint32_t args[3];
+        int fildes;
+        off_t offset;
+        int whence;
+
+        if (mem_read(sl, r1, args, sizeof (args)) != 0 ) {
+            DLOG("Semihosting SYS_LSEEK error: "
+                 "cannot read args from target memory\n");
+            *ret = -1;
+            return -1;
+        }
+
+        fildes = (int)args[0];
+        offset = (off_t)args[1];
+        whence = (int)args[2];
+
+        DLOG("Semihosting lseek(%d, %d, %d)\n", fildes, offset, whence);
+
+        *ret = (uint32_t)lseek(fildes, offset, whence);
+
+        DLOG("Semihosting lseek result: %d\n", *ret);
+
+        if (*ret == (uint32_t)-1) {
+            return -1;
+        }
         break;
     }
     case SEMIHOST_SYS_WRITE0:

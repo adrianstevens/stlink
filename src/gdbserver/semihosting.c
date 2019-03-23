@@ -171,6 +171,25 @@ static int open_mode_flags[12] = {
 
 static int saved_errno = 0;
 
+/* FD values below this will be forwarded to semihosting by NuttX */
+/* This is to deal with the base streams such as stdin, stdout, stderr. */
+#define SEMIHOSTING_MIN_FD 2
+
+/* Only FD values above this will be forwarded to semihosting by NuttX */
+/* Keep in sync with stlink semihosting.c */
+#define SEMIHOSTING_BASE_FD 32
+
+static int get_fd(int fd)
+{
+    if (fd <= SEMIHOSTING_MIN_FD)
+        return fd;
+
+    if (fd >= SEMIHOSTING_BASE_FD)
+        return fd - SEMIHOSTING_BASE_FD;
+
+    return fd;
+}
+
 int do_semihosting (stlink_t *sl, uint32_t r0, uint32_t r1, uint32_t *ret) {
 
     if (sl == NULL || ret == NULL) {
@@ -187,6 +206,7 @@ int do_semihosting (stlink_t *sl, uint32_t r0, uint32_t r1, uint32_t *ret) {
         uint32_t mode;
         uint32_t name_len;
         char     *name;
+        int      fd;
 
         if (mem_read(sl, r1, args, sizeof (args)) != 0 ) {
             DLOG("Semihosting SYS_OPEN error: "
@@ -235,7 +255,8 @@ int do_semihosting (stlink_t *sl, uint32_t r0, uint32_t r1, uint32_t *ret) {
 
         DLOG("Semihosting: open('%s', (SH open mode)%d, 0644)\n", name, mode);
 
-        *ret = (uint32_t)open(name, open_mode_flags[mode], 0644);
+        fd = open(name, open_mode_flags[mode], 0644);
+        *ret = (fd >= 0) ? ((uint32_t)fd + SEMIHOSTING_BASE_FD) : (uint32_t)fd;
         saved_errno = errno;
 
         DLOG("Semihosting: return %d\n", *ret);
@@ -255,7 +276,7 @@ int do_semihosting (stlink_t *sl, uint32_t r0, uint32_t r1, uint32_t *ret) {
             return -1;
         }
 
-        fd = (int)args[0];
+        fd = get_fd((int)args[0]);
 
         DLOG("Semihosting: close(%d)\n", fd);
 
@@ -280,7 +301,7 @@ int do_semihosting (stlink_t *sl, uint32_t r0, uint32_t r1, uint32_t *ret) {
             return -1;
         }
 
-        fd             = (int)args[0];
+        fd             = get_fd((int)args[0]);
         buffer_address = args[1];
         buffer_len     = args[2];
 
@@ -338,7 +359,7 @@ int do_semihosting (stlink_t *sl, uint32_t r0, uint32_t r1, uint32_t *ret) {
             return -1;
         }
 
-        fd             = (int)args[0];
+        fd             = get_fd((int)args[0]);
         buffer_address = args[1];
         buffer_len     = args[2];
 
@@ -449,7 +470,7 @@ int do_semihosting (stlink_t *sl, uint32_t r0, uint32_t r1, uint32_t *ret) {
             return -1;
         }
 
-        fd = (int)args[0];
+        fd = get_fd((int)args[0]);
         offset = (off_t)args[1];
 
         DLOG("Semihosting: lseek(%d, %d, SEEK_SET)\n", fd, offset);
@@ -559,7 +580,7 @@ int do_semihosting (stlink_t *sl, uint32_t r0, uint32_t r1, uint32_t *ret) {
             return -1;
         }
 
-        fd             = (int)args[0];
+        fd             = get_fd((int)args[0]);
         buffer_address = args[1];
 
         *ret = fstat(fd, &st);
@@ -593,7 +614,7 @@ int do_semihosting (stlink_t *sl, uint32_t r0, uint32_t r1, uint32_t *ret) {
             return -1;
         }
 
-        fildes = (int)args[0];
+        fildes = get_fd((int)args[0]);
         offset = (off_t)args[1];
         whence = (int)args[2];
 
